@@ -150,8 +150,11 @@ export const TunerMeter: React.FC<TunerMeterProps> = ({
 
           {/* Needle Pin */}
           <g
-            className="needle-transition"
-            style={{ transform: `rotate(${angle}deg)` }}
+            style={{
+              transform: `rotate(${angle}deg)`,
+              transformOrigin: '150px 140px',
+              transition: 'transform 0.12s cubic-bezier(0.2, 0.8, 0.4, 1)'
+            }}
           >
             <polygon points="148,140 152,140 150.8,24 149.2,24" fill={needleColor} />
             <circle cx="150" cy="23" r="3.5" fill={needleColor} />

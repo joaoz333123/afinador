@@ -17,7 +17,7 @@ export function useAudioTuner({
   selectedString,
   isAutoMode,
   noiseGateThreshold,
-  onAutoSelectString
+  onAutoSelectString,
 }: UseAudioTunerProps) {
   const [isMicActive, setIsMicActive] = useState<boolean>(false);
   const [detectedFreq, setDetectedFreq] = useState<number | null>(null);
@@ -26,11 +26,14 @@ export function useAudioTuner({
   const [volume, setVolume] = useState<number>(0);
   const [micError, setMicError] = useState<string | null>(null);
 
+  // Persistent Web Audio references to prevent GC and clocking issues
   const streamRef = useRef<MediaStream | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const silentGainRef = useRef<GainNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  // References for fast loop access without stale closures
+  // Synchronized refs for the animation loop
   const presetRef = useRef(currentPreset);
   const selectedStringRef = useRef(selectedString);
   const isAutoModeRef = useRef(isAutoMode);
@@ -62,10 +65,39 @@ export function useAudioTuner({
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
     }
+
+    if (sourceRef.current) {
+      try {
+        sourceRef.current.disconnect();
+      } catch (_) {
+        // ignore
+      }
+      sourceRef.current = null;
+    }
+
+    if (analyserRef.current) {
+      try {
+        analyserRef.current.disconnect();
+      } catch (_) {
+        // ignore
+      }
+      analyserRef.current = null;
+    }
+
+    if (silentGainRef.current) {
+      try {
+        silentGainRef.current.disconnect();
+      } catch (_) {
+        // ignore
+      }
+      silentGainRef.current = null;
+    }
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+
     setIsMicActive(false);
     setVolume(0);
     setAction('idle');
@@ -82,24 +114,50 @@ export function useAudioTuner({
     try {
       setMicError(null);
       const audioCtx = getAudioContext();
+
       if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      });
+      // Request microphone access with safe fallback
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            autoGainControl: false,
+            noiseSuppression: false,
+          },
+        });
+      } catch {
+        // Fallback for devices/browsers that reject specific constraints
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+
+      // Ensure audio context is running
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
 
       streamRef.current = stream;
+
+      // Create nodes and hold persistent references to avoid Garbage Collection
       const source = audioCtx.createMediaStreamSource(stream);
+      sourceRef.current = source;
+
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 2048;
-      source.connect(analyser);
       analyserRef.current = analyser;
+
+      // Connect to a 0-gain node and destination:
+      // This forces Chrome and Safari to pull and clock the audio stream without playing feedback
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0;
+      silentGainRef.current = silentGain;
+
+      source.connect(analyser);
+      analyser.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
 
       setIsMicActive(true);
 
@@ -115,8 +173,8 @@ export function useAudioTuner({
           noiseGateRef.current
         );
 
-        // Volume meter: scaled to 0-100%
-        const volPercent = Math.min(100, Math.round(rms * 450));
+        // Volume meter: scaled smoothly between 0% and 100%
+        const volPercent = Math.min(100, Math.round((rms / 0.06) * 100));
         setVolume(volPercent);
 
         if (freq > 0) {
@@ -162,7 +220,7 @@ export function useAudioTuner({
     } catch (err: unknown) {
       console.error('Falha ao acessar microfone:', err);
       setIsMicActive(false);
-      setMicError('Não foi possível acessar o microfone. Verifique as permissões do seu navegador.');
+      setMicError('Não foi possível acessar o microfone. Verifique se o microfone está liberado nas permissões do seu navegador.');
     }
   }, [isMicActive, stopAudioLoop]);
 
@@ -183,6 +241,6 @@ export function useAudioTuner({
     toggleMic,
     setCents,
     setDetectedFreq,
-    setAction
+    setAction,
   };
 }
