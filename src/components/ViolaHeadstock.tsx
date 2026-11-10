@@ -26,10 +26,10 @@ export const ViolaHeadstock: React.FC<ViolaHeadstockProps> = ({
 
   const rightPegs = [
     { pegId: 4, label: '3R' },
-    { pegId: 3, label: '2º' },
-    { pegId: 2, label: '2º' },
-    { pegId: 1, label: '1º' },
-    { pegId: 0, label: '1º' },
+    { pegId: 3, label: '2A' },
+    { pegId: 2, label: '2B' },
+    { pegId: 1, label: '1A' },
+    { pegId: 0, label: '1B' },
   ];
 
   return (

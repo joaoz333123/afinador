@@ -74,11 +74,13 @@ export function App() {
 
   const handlePlayString = (str = selectedString) => {
     playReferenceTone(str.frequency);
-    // Visual feedback on needle
-    setCents(0);
-    setDetectedFreq(str.frequency);
-    setAction('in_tune');
     setSelectedStringId(str.id);
+    if (isMicActive) {
+      // Visual feedback on needle only when microphone is active
+      setCents(0);
+      setDetectedFreq(str.frequency);
+      setAction('in_tune');
+    }
   };
 
   return (
@@ -131,30 +133,106 @@ export function App() {
                 </span>
               </div>
 
-              <div className="grid grid-cols-5 gap-1.5">
+              <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
                 {[1, 2, 3, 4, 5].map((pairNum) => {
                   const pairStrings = currentPreset.strings.filter((s) => s.pair === pairNum);
-                  const isCurrent = pairStrings.some((s) => s.id === selectedStringId);
+                  const isUnison = pairStrings[0].type === 'uníssono';
+
+                  if (isUnison) {
+                    const isSelected = pairStrings.some((s) => s.id === selectedStringId);
+                    return (
+                      <div
+                        key={pairNum}
+                        className={`rounded-xl border p-1 sm:p-1.5 flex flex-col justify-between transition ${
+                          isSelected
+                            ? 'bg-amber-500/10 border-amber-500/60 shadow-md'
+                            : 'bg-black/30 border-white/5'
+                        }`}
+                      >
+                        <div className="text-[10px] text-neutral-400 text-center font-semibold mb-1">
+                          {pairNum}º Par
+                        </div>
+                        <button
+                          onClick={() => {
+                            setSelectedStringId(pairStrings[0].id);
+                            handlePlayString(pairStrings[0]);
+                          }}
+                          className={`w-full py-1.5 px-0.5 rounded-lg border text-center transition flex flex-col items-center justify-center active:scale-95 ${
+                            isSelected
+                              ? 'bg-amber-500/25 border-amber-500 text-amber-300 font-bold shadow'
+                              : 'bg-white/5 border-transparent text-neutral-300 hover:border-amber-500/40 hover:bg-white/10'
+                          }`}
+                          title={`${pairNum}º Par Uníssono (${pairStrings[0].note}${pairStrings[0].octave} - ${pairStrings[0].frequency.toFixed(1)} Hz)`}
+                        >
+                          <div className="text-xs sm:text-sm font-black text-white">
+                            {pairStrings[0].note}{pairStrings[0].octave}
+                          </div>
+                          <div className="text-[9px] text-amber-400/80 font-medium">
+                            Uníssono
+                          </div>
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  const requinta = pairStrings.find((s) => s.type === 'requinta') || pairStrings[0];
+                  const bordao = pairStrings.find((s) => s.type === 'bordão') || pairStrings[1];
+                  const isPairActive = pairStrings.some((s) => s.id === selectedStringId);
 
                   return (
-                    <button
+                    <div
                       key={pairNum}
-                      onClick={() => {
-                        setSelectedStringId(pairStrings[0].id);
-                        handlePlayString(pairStrings[0]);
-                      }}
-                      className={`p-2 rounded-xl border text-center transition active:scale-95 ${
-                        isCurrent
-                          ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold shadow'
-                          : 'bg-black/30 border-white/5 text-neutral-300 hover:border-amber-500/40'
+                      className={`rounded-xl border p-1 sm:p-1.5 flex flex-col justify-between transition ${
+                        isPairActive
+                          ? 'bg-neutral-800/60 border-neutral-700 shadow-md'
+                          : 'bg-black/30 border-white/5'
                       }`}
                     >
-                      <div className="text-[10px] text-neutral-400">{pairNum}º Par</div>
-                      <div className="text-sm font-black text-white">{pairStrings[0].note}</div>
-                      <div className="text-[9px] text-amber-400/80">
-                        {pairStrings[0].type === 'uníssono' ? 'Uníssono' : 'Oitavado'}
+                      <div className="text-[10px] text-neutral-400 text-center font-semibold mb-1">
+                        {pairNum}º Par
                       </div>
-                    </button>
+                      <div className="grid grid-cols-2 gap-1 w-full">
+                        <button
+                          onClick={() => {
+                            setSelectedStringId(requinta.id);
+                            handlePlayString(requinta);
+                          }}
+                          className={`py-1 px-0.5 rounded-lg border text-center transition flex flex-col items-center justify-center active:scale-95 ${
+                            selectedStringId === requinta.id
+                              ? 'bg-sky-500/25 border-sky-400 text-sky-200 font-bold shadow'
+                              : 'bg-white/5 border-transparent text-neutral-300 hover:border-sky-400/50 hover:bg-white/10'
+                          }`}
+                          title={`Requinta: ${requinta.note}${requinta.octave} (${requinta.frequency.toFixed(1)} Hz)`}
+                        >
+                          <div className="text-[11px] sm:text-xs font-black text-white leading-tight">
+                            {requinta.note}{requinta.octave}
+                          </div>
+                          <div className="text-[8px] sm:text-[9px] text-sky-400 font-bold uppercase">
+                            Req (R)
+                          </div>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setSelectedStringId(bordao.id);
+                            handlePlayString(bordao);
+                          }}
+                          className={`py-1 px-0.5 rounded-lg border text-center transition flex flex-col items-center justify-center active:scale-95 ${
+                            selectedStringId === bordao.id
+                              ? 'bg-purple-500/25 border-purple-400 text-purple-200 font-bold shadow'
+                              : 'bg-white/5 border-transparent text-neutral-300 hover:border-purple-400/50 hover:bg-white/10'
+                          }`}
+                          title={`Bordão: ${bordao.note}${bordao.octave} (${bordao.frequency.toFixed(1)} Hz)`}
+                        >
+                          <div className="text-[11px] sm:text-xs font-black text-white leading-tight">
+                            {bordao.note}{bordao.octave}
+                          </div>
+                          <div className="text-[8px] sm:text-[9px] text-purple-400 font-bold uppercase">
+                            Bor (B)
+                          </div>
+                        </button>
+                      </div>
+                    </div>
                   );
                 })}
               </div>

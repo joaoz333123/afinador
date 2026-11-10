@@ -182,22 +182,50 @@ export function useAudioTuner({
           let target = selectedStringRef.current;
 
           if (isAutoModeRef.current) {
-            // Find string with minimal cents deviation
-            let minDiff = Infinity;
-            let bestString = target;
+            const currentString = selectedStringRef.current;
+            const currentCentsDiff = Math.abs(calculateCents(freq, currentString.frequency));
 
-            for (const s of presetRef.current.strings) {
-              const diff = Math.abs(calculateCents(freq, s.frequency));
-              if (diff < minDiff) {
-                minDiff = diff;
-                bestString = s;
+            if (currentCentsDiff <= 50) {
+              // 1. Frequência corresponde à corda atualmente selecionada dentro de ±50 cents: mantém!
+              target = currentString;
+            } else {
+              // 2. Se não for a corda atual, verifica se corresponde à outra corda do MESMO par (±50 cents)
+              const samePairStrings = presetRef.current.strings.filter(
+                (s) => s.pair === currentString.pair && s.id !== currentString.id
+              );
+              let partnerMatch: ViolaString | null = null;
+              let minPartnerDiff = Infinity;
+
+              for (const partner of samePairStrings) {
+                const diff = Math.abs(calculateCents(freq, partner.frequency));
+                if (diff <= 50 && diff < minPartnerDiff) {
+                  minPartnerDiff = diff;
+                  partnerMatch = partner;
+                }
+              }
+
+              if (partnerMatch) {
+                target = partnerMatch;
+                onAutoSelectRef.current(target.id);
+              } else {
+                // 3. Apenas se fora de ±50 cents do par atual, busca a corda mais próxima no instrumento
+                let minDiff = Infinity;
+                let bestString = currentString;
+
+                for (const s of presetRef.current.strings) {
+                  const diff = Math.abs(calculateCents(freq, s.frequency));
+                  if (diff < minDiff) {
+                    minDiff = diff;
+                    bestString = s;
+                  }
+                }
+
+                if (bestString.id !== currentString.id) {
+                  onAutoSelectRef.current(bestString.id);
+                }
+                target = bestString;
               }
             }
-
-            if (bestString.id !== selectedStringRef.current.id) {
-              onAutoSelectRef.current(bestString.id);
-            }
-            target = bestString;
           }
 
           const c = calculateCents(freq, target.frequency);

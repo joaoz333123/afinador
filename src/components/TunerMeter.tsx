@@ -31,9 +31,13 @@ export const TunerMeter: React.FC<TunerMeterProps> = ({
   onPlayReference,
   onToggleMode,
 }) => {
-  // Clamped cents (-50 to +50) mapped to rotation angle (-60deg to +60deg)
+  // Clamped cents (-50 to +50) mapped to rotation angle (-85deg to +85deg) matching visual scale
   const clampedCents = Math.max(-50, Math.min(50, cents));
-  const angle = (clampedCents / 50) * 60;
+  const angle = (clampedCents / 50) * 85;
+
+  // Sincroniza a posição do marcador do noise gate com a mesma escala do volume (rms / 0.06 * 100)%
+  const minimumRms = (noiseGateThreshold * 0.02) + 0.002;
+  const noiseGateMarkerPercent = Math.min(100, Math.max(0, (minimumRms / 0.06) * 100));
 
   let needleColor = '#eab308'; // yellow
   let actionText = 'Toque a corda...';
@@ -247,8 +251,8 @@ export const TunerMeter: React.FC<TunerMeterProps> = ({
             style={{ width: `${volume}%` }}
           />
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-400"
-            style={{ left: `${noiseGateThreshold * 100}%` }}
+            className="absolute top-0 bottom-0 w-0.5 bg-red-400 z-10"
+            style={{ left: `${noiseGateMarkerPercent}%` }}
             title="Corte do filtro de ruído"
           />
         </div>
