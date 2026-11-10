@@ -252,6 +252,120 @@ export function useAudioTuner({
     }
   }, [isMicActive, stopAudioLoop]);
 
+  const playAudioFile = useCallback(async (file: File) => {
+    try {
+      stopAudioLoop();
+      setMicError(null);
+      const audioCtx = getAudioContext();
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+
+      const arrayBuffer = await file.arrayBuffer();
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+      const bufferSource = audioCtx.createBufferSource();
+      bufferSource.buffer = audioBuffer;
+
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyserRef.current = analyser;
+
+      bufferSource.connect(analyser);
+      analyser.connect(audioCtx.destination);
+
+      setIsMicActive(true);
+
+      const buffer = new Float32Array(analyser.fftSize);
+
+      const loop = () => {
+        if (!analyserRef.current) return;
+        analyserRef.current.getFloatTimeDomainData(buffer);
+        const { detectedFreq: freq, rms } = detectPitch(
+          buffer,
+          audioCtx.sampleRate,
+          noiseGateRef.current
+        );
+
+        const volPercent = Math.min(100, Math.round((rms / 0.06) * 100));
+        setVolume(volPercent);
+
+        if (freq > 0) {
+          setDetectedFreq(freq);
+          let target = selectedStringRef.current;
+
+          if (isAutoModeRef.current) {
+            const currentString = selectedStringRef.current;
+            const currentCentsDiff = Math.abs(calculateCents(freq, currentString.frequency));
+
+            if (currentCentsDiff <= 50) {
+              target = currentString;
+            } else {
+              const samePairStrings = presetRef.current.strings.filter(
+                (s) => s.pair === currentString.pair && s.id !== currentString.id
+              );
+              let partnerMatch: ViolaString | null = null;
+              let minPartnerDiff = Infinity;
+
+              for (const partner of samePairStrings) {
+                const diff = Math.abs(calculateCents(freq, partner.frequency));
+                if (diff <= 50 && diff < minPartnerDiff) {
+                  minPartnerDiff = diff;
+                  partnerMatch = partner;
+                }
+              }
+
+              if (partnerMatch) {
+                target = partnerMatch;
+                onAutoSelectRef.current(target.id);
+              } else {
+                let minDiff = Infinity;
+                let bestString = currentString;
+
+                for (const s of presetRef.current.strings) {
+                  const diff = Math.abs(calculateCents(freq, s.frequency));
+                  if (diff < minDiff) {
+                    minDiff = diff;
+                    bestString = s;
+                  }
+                }
+
+                if (bestString.id !== currentString.id) {
+                  onAutoSelectRef.current(bestString.id);
+                }
+                target = bestString;
+              }
+            }
+          }
+
+          const c = calculateCents(freq, target.frequency);
+          setCents(c);
+
+          const absCents = Math.abs(c);
+          if (absCents <= 3.5) {
+            setAction('in_tune');
+          } else if (c < 0) {
+            setAction('too_low');
+          } else {
+            setAction('too_high');
+          }
+        }
+
+        animFrameRef.current = requestAnimationFrame(loop);
+      };
+
+      bufferSource.onended = () => {
+        setIsMicActive(false);
+      };
+
+      bufferSource.start();
+      animFrameRef.current = requestAnimationFrame(loop);
+    } catch (err) {
+      console.error('Erro ao processar áudio:', err);
+      setMicError('Não foi possível decodificar o arquivo de áudio gravado.');
+    }
+  }, [stopAudioLoop]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -267,6 +381,7 @@ export function useAudioTuner({
     volume,
     micError,
     toggleMic,
+    playAudioFile,
     setCents,
     setDetectedFreq,
     setAction,

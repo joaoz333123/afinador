@@ -34,6 +34,7 @@ export function App() {
     volume,
     micError,
     toggleMic,
+    playAudioFile,
     setCents,
     setDetectedFreq,
     setAction
@@ -119,6 +120,7 @@ export function App() {
               onToggleMic={toggleMic}
               onPlayReference={() => handlePlayString(selectedString)}
               onToggleMode={(auto) => setIsAutoMode(auto)}
+              onUploadAudio={playAudioFile}
             />
 
             {/* Quick Test bar */}

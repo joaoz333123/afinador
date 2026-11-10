@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { ViolaString, TuningAction } from '../types/tuner';
-import { Mic, MicOff, Volume2, Radio } from 'lucide-react';
+import { Mic, MicOff, Volume2, Radio, Upload } from 'lucide-react';
 
 interface TunerMeterProps {
   selectedString: ViolaString;
@@ -15,6 +15,7 @@ interface TunerMeterProps {
   onToggleMic: () => void;
   onPlayReference: () => void;
   onToggleMode: (auto: boolean) => void;
+  onUploadAudio?: (file: File) => void;
 }
 
 export const TunerMeter: React.FC<TunerMeterProps> = ({
@@ -30,7 +31,9 @@ export const TunerMeter: React.FC<TunerMeterProps> = ({
   onToggleMic,
   onPlayReference,
   onToggleMode,
+  onUploadAudio,
 }) => {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   // Clamped cents (-50 to +50) mapped to rotation angle (-85deg to +85deg) matching visual scale
   const clampedCents = Math.max(-50, Math.min(50, cents));
   const angle = (clampedCents / 50) * 85;
@@ -217,28 +220,53 @@ export const TunerMeter: React.FC<TunerMeterProps> = ({
         </div>
       )}
 
-      {/* Action Buttons: Turn on Mic & Play Reference */}
-      <div className="w-full mt-4 flex items-center gap-3">
+      {/* Action Buttons: Turn on Mic & Play Reference & Test Audio File */}
+      <div className="w-full mt-4 flex items-center gap-2 sm:gap-3 flex-wrap">
         <button
           onClick={onToggleMic}
-          className={`flex-1 py-3 px-4 rounded-2xl font-bold text-sm shadow-lg transition active:scale-[0.98] flex items-center justify-center gap-2 ${
+          className={`flex-1 min-w-[140px] py-3 px-4 rounded-2xl font-bold text-sm shadow-lg transition active:scale-[0.98] flex items-center justify-center gap-2 ${
             isMicActive
               ? 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-400 hover:to-rose-500 text-white shadow-rose-900/30'
               : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black shadow-amber-600/20'
           }`}
         >
           {isMicActive ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-          <span>{isMicActive ? 'Desligar Microfone' : 'Ligar Microfone'}</span>
+          <span>{isMicActive ? 'Desligar Mic' : 'Ligar Mic'}</span>
         </button>
 
         <button
           onClick={onPlayReference}
-          className="py-3 px-4 rounded-2xl font-semibold text-xs bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 hover:border-amber-500/40 text-white transition flex items-center gap-1.5"
+          className="py-3 px-3 sm:px-4 rounded-2xl font-semibold text-xs bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 hover:border-amber-500/40 text-white transition flex items-center gap-1.5"
           title="Tocar som de referência para afinar de ouvido"
         >
           <Volume2 className="w-4 h-4 text-amber-400" />
           <span className="hidden sm:inline">Tocar Tom</span>
         </button>
+
+        {onUploadAudio && (
+          <>
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="audio/*,video/mp4,video/*,.mp4,.wav,.mp3,.m4a"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  onUploadAudio(file);
+                }
+              }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="py-3 px-3 sm:px-4 rounded-2xl font-semibold text-xs bg-purple-950/40 hover:bg-purple-900/60 border border-purple-500/30 hover:border-purple-400 text-purple-200 transition flex items-center gap-1.5"
+              title="Testar com arquivo de áudio gravado (.mp4, .wav, .mp3)"
+            >
+              <Upload className="w-4 h-4 text-purple-400" />
+              <span>Testar Áudio</span>
+            </button>
+          </>
+        )}
       </div>
 
       {/* Noise Gate & Signal Level VU Bar */}
