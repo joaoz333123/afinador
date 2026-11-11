@@ -1,63 +1,61 @@
-# 🪕 Afinador de Viola Caipira (10 Cordas)
+# 🪕 Afinador de Viola Caipira Online
 
-> Plataforma online gratuita e responsiva para afinação de viola de 10 cordas (Viola Caipira) com captação direta pelo microfone via **Web Audio API**.
+> Afinador cromático online para **Viola Caipira de 10 cordas**, com captação direta via Web Audio API e mecânica de ponteiro inspirada no *Google Guitar Tuner*.
 
-🌐 **Acesse online:** [https://afinador-ebon.vercel.app](https://afinador-ebon.vercel.app)
+🌐 **App Online:** [afinador-ebon.vercel.app](https://afinador-ebon.vercel.app)
 
 ---
 
-## 🎵 Características e Funcionalidades
+## ⚡ Principais Recursos
 
-- **Captação por Microfone em Tempo Real:** Detecção de frequência fundamental via **Autocorrelação com Interpolação Parabólica**, sem enviar áudio para servidores (100% no navegador, latência zero).
-- **Distinção de Cordas Oitavadas:** Suporte completo para afinar individualmente as cordas dos pares oitavados (3º, 4º e 5º pares), diferenciando a **requinta** (corda fina/aguda) do **bordão** (corda grossa/grave).
-- **Afinações Tradicionais Pré-Configuradas:**
-  - **Cebolão em Mi** (`E4 E4`, `B3 B3`, `G#4 G#3`, `E4 E3`, `B3 B2`)
-  - **Cebolão em Ré** (`D4 D4`, `A3 A3`, `F#4 F#3`, `D4 D3`, `A3 A2`)
-  - **Rio Abaixo** (`D4 D4`, `B3 B3`, `G4 G3`, `D4 D3`, `G3 G2`)
-  - **Boiadeira** (`D4 D4`, `A3 A3`, `F#4 F#3`, `D4 D3`, `G3 G2`)
-  - **Natural / Maior** (`E4 E4`, `B3 B3`, `G#4 G#3`, `E4 E3`, `E3 E2`)
-- **Mão da Viola Interativa (Cravelhal):** Ilustração vetorial SVG com as 10 cravelhas clicáveis para selecionar e travar na corda desejada.
-- **Tons de Referência:** Gerador acústico sintetizado para afinar de ouvido.
-- **Filtro de Ruído (Noise Gate) & Calibração A4:** Sensibilidade do microfone ajustável e calibração de frequência do Lá central (430 a 450 Hz, padrão 440 Hz).
+* **Relógio Cromático 360°:** Mostrador circular com as 12 notas da escala e destaque para o acorde da afinação ativa da viola.
+* **Movimentação Suave (Google Damping):** Amortecimento contínuo pelo caminho angular mais curto, sem tremores ou saltos bruscos do ponteiro.
+* **Detecção por Ataque (*Onset-Gated*):** Seleção inteligente da corda no impacto da palhetada com trava firme durante a sustentação (elimina a oscilação entre harmônicos).
+* **Suporte Completo a Cordas Oitavadas:** Afinação individual e precisa de **Bordão** (grave) e **Requinta** (aguda) nos pares 3, 4 e 5.
+* **Cravelhal Interativo (Mão da Viola):** Cabeçote com as 10 cravelhas clicáveis para seleção direta e feedback visual de afinação.
+* **Tons de Referência:** Síntese de áudio limpa para afinação de ouvido.
+* **Ajustes Avançados:** Calibração do $A4$ ($430\text{--}450\text{ Hz}$) e controle de sensibilidade (*Noise Gate*).
+
+---
+
+## 🎶 Afinações Disponíveis
+
+| Afinação | Notas dos 5 Pares (1º ao 5º) | Acorde |
+| :--- | :--- | :--- |
+| **Cebolão em Mi** | `E4/E4` • `B3/B3` • `G#4/G#3` • `E4/E3` • `B3/B2` | Mi Maior ($E$) |
+| **Cebolão em Ré** | `D4/D4` • `A3/A3` • `F#4/F#3` • `D4/D3` • `A3/A2` | Ré Maior ($D$) |
+| **Rio Abaixo** | `D4/D4` • `B3/B3` • `G4/G3` • `D4/D3` • `G3/G2` | Sol Maior ($G$) |
+| **Boiadeira** | `D4/D4` • `A3/A3` • `F#4/F#3` • `D4/D3` • `G3/G2` | Sol Maior modal |
+| **Natural / Maior** | `E4/E4` • `B3/B3` • `G#4/G#3` • `E4/E3` • `E3/E2` | Mi Maior |
 
 ---
 
 ## 🚀 Como Executar Localmente
 
-### Pré-requisitos
-- Node.js 18+ instalado
-- npm ou yarn
-
-### Instalação e Execução
 ```bash
-# Clone o repositório
+# 1. Clonar o projeto
 git clone https://github.com/joaoz333123/afinador.git
 cd afinador
 
-# Instale as dependências
+# 2. Instalar dependências
 npm install
 
-# Inicie o servidor local de desenvolvimento
+# 3. Rodar localmente
 npm run dev
 ```
 
-Abra o navegador em `http://localhost:5173`.
+Acesse em seu navegador: `http://localhost:5173`
 
-### Build de Produção
+Para gerar a versão de produção otimizada:
 ```bash
 npm run build
 ```
-Os arquivos otimizados serão gerados na pasta `dist/`.
 
 ---
 
-## 🛠️ Tecnologias Utilizadas
+## 🛠️ Tecnologias
 
-- [React 18](https://react.dev/)
-- [Vite](https://vitejs.dev/)
-- [TypeScript](https://www.typescriptlang.org/)
-- [Tailwind CSS](https://tailwindcss.com/)
-- [Web Audio API](https://developer.mozilla.org/pt-BR/docs/Web/API/Web_Audio_API)
-- [Lucide Icons](https://lucide.dev/)
-- [Canvas Confetti](https://www.kirilv.com/canvas-confetti/)
-- [Vercel](https://vercel.com/) (Hospedagem com HTTPS)
+* **Frontend:** React 18, TypeScript, Tailwind CSS, Vite.
+* **Processamento de Áudio:** Web Audio API, McLeod Pitch Method (NSDF) com interpolação parabólica.
+* **Design & Animação:** SVG Dinâmico, Lucide Icons, Canvas Confetti.
+* **Deploy:** Vercel (HTTPS obrigatório para acesso ao microfone).
