@@ -143,19 +143,20 @@ export function useAudioTuner({
       const sorted = [...freqHistoryRef.current].sort((a, b) => a - b);
       const stableFreq = sorted[Math.floor(sorted.length / 2)];
 
-      // 2. Identify target string (with hysteresis & debounce)
+      // 2. Identify target string with Pitch-Lock and Anti-Flicker Hysteresis
       let target = selectedStringRef.current;
 
       if (isAutoModeRef.current) {
         const currentString = selectedStringRef.current;
         const currentCentsDiff = Math.abs(calculateCents(stableFreq, currentString.frequency));
 
-        if (currentCentsDiff <= 50) {
-          // Keep current string if within ±50 cents
+        // Pitch-Lock: Se a frequência estiver a até ±65 cents da corda selecionada, mantém travado firmemente nela!
+        if (currentCentsDiff <= 65) {
           candidateSwitchRef.current = null;
           target = currentString;
         } else {
-          // Check partner string in the same pair first
+          // Apenas tenta trocar de corda se a frequência estiver claramente fora da corda atual
+          // 1. Procura primeiro no parceiro do mesmo par
           const samePairStrings = presetRef.current.strings.filter(
             (s) => s.pair === currentString.pair && s.id !== currentString.id
           );
@@ -170,7 +171,7 @@ export function useAudioTuner({
             }
           }
 
-          // If not in same pair, search closest string across entire instrument
+          // 2. Se não for do mesmo par, procura nas outras cordas da viola
           if (!candidateString) {
             for (const s of presetRef.current.strings) {
               const diff = Math.abs(calculateCents(stableFreq, s.frequency));
@@ -182,17 +183,22 @@ export function useAudioTuner({
           }
 
           if (candidateString && candidateString.id !== currentString.id) {
-            // Debounce: candidate string must persist for at least 3 consecutive frames
+            // Anti-Flicker Debounce: A nova nota precisa persistir por pelo menos 15 quadros (~250ms)
+            // antes de trocar de corda, impedindo que harmônicos ou ressonâncias façam a tela piscar
             if (candidateSwitchRef.current?.id === candidateString.id) {
               candidateSwitchRef.current.count++;
-              if (candidateSwitchRef.current.count >= 3) {
+              if (candidateSwitchRef.current.count >= 15) {
                 target = candidateString;
                 onAutoSelectRef.current(target.id);
                 candidateSwitchRef.current = null;
+                // Inicializa o EMA no novo alvo
+                smoothedCentsRef.current = calculateCents(stableFreq, target.frequency);
               }
             } else {
               candidateSwitchRef.current = { id: candidateString.id, count: 1 };
             }
+          } else {
+            candidateSwitchRef.current = null;
           }
         }
       }
@@ -224,8 +230,10 @@ export function useAudioTuner({
     } else {
       // Silence / signal dropped below noise gate
       silenceCountRef.current++;
-      freqHistoryRef.current = [];
       candidateSwitchRef.current = null;
+      if (silenceCountRef.current > 10) {
+        freqHistoryRef.current = [];
+      }
 
       // Hold reading for ~300ms (18 frames @ 60fps), then gently drift back to center
       if (silenceCountRef.current > 18) {
