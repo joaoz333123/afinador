@@ -160,7 +160,7 @@ export const TunerMeter: React.FC<TunerMeterProps> = ({
             style={{
               transform: `rotate(${angle}deg)`,
               transformOrigin: '150px 140px',
-              transition: 'transform 0.12s cubic-bezier(0.2, 0.8, 0.4, 1)'
+              transition: 'transform 0.06s linear'
             }}
           >
             <polygon points="148,140 152,140 150.8,24 149.2,24" fill={needleColor} />

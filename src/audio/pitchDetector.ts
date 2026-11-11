@@ -14,7 +14,7 @@ export function getMinimumRms(noiseGateThreshold: number): number {
  * - Robust against complex overtones and sub-harmonic confusion.
  */
 export function detectPitch(
-  buffer: Float32Array,
+  buffer: Float32Array<ArrayBuffer>,
   sampleRate: number,
   noiseGateThreshold: number
 ): PitchDetectionResult {

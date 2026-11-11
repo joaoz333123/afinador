@@ -26,12 +26,19 @@ export function useAudioTuner({
   const [volume, setVolume] = useState<number>(0);
   const [micError, setMicError] = useState<string | null>(null);
 
-  // Persistent Web Audio references to prevent GC and clocking issues
+  // Persistent Web Audio references
   const streamRef = useRef<MediaStream | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const silentGainRef = useRef<GainNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
+
+  // Smoothing and stabilization dynamics
+  const smoothedCentsRef = useRef<number>(0);
+  const smoothedFreqRef = useRef<number>(0);
+  const freqHistoryRef = useRef<number[]>([]);
+  const candidateSwitchRef = useRef<{ id: number; count: number } | null>(null);
+  const silenceCountRef = useRef<number>(0);
 
   // Synchronized refs for the animation loop
   const presetRef = useRef(currentPreset);
@@ -103,6 +110,136 @@ export function useAudioTuner({
     setAction('idle');
     setCents(0);
     setDetectedFreq(null);
+    smoothedCentsRef.current = 0;
+    smoothedFreqRef.current = 0;
+    freqHistoryRef.current = [];
+    candidateSwitchRef.current = null;
+    silenceCountRef.current = 0;
+  }, []);
+
+  // Core processing loop with Median Filtering + Exponential Moving Average (EMA)
+  const processFrame = useCallback((audioCtx: AudioContext, buffer: Float32Array<ArrayBuffer>) => {
+    if (!analyserRef.current) return;
+
+    analyserRef.current.getFloatTimeDomainData(buffer);
+    const { detectedFreq: rawFreq, rms } = detectPitch(
+      buffer,
+      audioCtx.sampleRate,
+      noiseGateRef.current
+    );
+
+    // Smooth volume meter: scaled smoothly between 0% and 100%
+    const rawVol = Math.min(100, Math.round((rms / 0.06) * 100));
+    setVolume(rawVol);
+
+    if (rawFreq > 0) {
+      silenceCountRef.current = 0;
+
+      // 1. Median filtering over last 5 detected frequencies to eliminate transient pick spikes
+      freqHistoryRef.current.push(rawFreq);
+      if (freqHistoryRef.current.length > 5) {
+        freqHistoryRef.current.shift();
+      }
+      const sorted = [...freqHistoryRef.current].sort((a, b) => a - b);
+      const stableFreq = sorted[Math.floor(sorted.length / 2)];
+
+      // 2. Identify target string (with hysteresis & debounce)
+      let target = selectedStringRef.current;
+
+      if (isAutoModeRef.current) {
+        const currentString = selectedStringRef.current;
+        const currentCentsDiff = Math.abs(calculateCents(stableFreq, currentString.frequency));
+
+        if (currentCentsDiff <= 50) {
+          // Keep current string if within ±50 cents
+          candidateSwitchRef.current = null;
+          target = currentString;
+        } else {
+          // Check partner string in the same pair first
+          const samePairStrings = presetRef.current.strings.filter(
+            (s) => s.pair === currentString.pair && s.id !== currentString.id
+          );
+          let candidateString: ViolaString | null = null;
+          let minDiff = Infinity;
+
+          for (const partner of samePairStrings) {
+            const diff = Math.abs(calculateCents(stableFreq, partner.frequency));
+            if (diff <= 50 && diff < minDiff) {
+              minDiff = diff;
+              candidateString = partner;
+            }
+          }
+
+          // If not in same pair, search closest string across entire instrument
+          if (!candidateString) {
+            for (const s of presetRef.current.strings) {
+              const diff = Math.abs(calculateCents(stableFreq, s.frequency));
+              if (diff < minDiff) {
+                minDiff = diff;
+                candidateString = s;
+              }
+            }
+          }
+
+          if (candidateString && candidateString.id !== currentString.id) {
+            // Debounce: candidate string must persist for at least 3 consecutive frames
+            if (candidateSwitchRef.current?.id === candidateString.id) {
+              candidateSwitchRef.current.count++;
+              if (candidateSwitchRef.current.count >= 3) {
+                target = candidateString;
+                onAutoSelectRef.current(target.id);
+                candidateSwitchRef.current = null;
+              }
+            } else {
+              candidateSwitchRef.current = { id: candidateString.id, count: 1 };
+            }
+          }
+        }
+      }
+
+      // 3. Smooth Exponential Moving Average (EMA) for the needle and cents
+      const rawCents = calculateCents(stableFreq, target.frequency);
+      const alpha = 0.16; // fluid analog needle inertia (~120ms settling time)
+
+      if (smoothedFreqRef.current === 0) {
+        smoothedCentsRef.current = rawCents;
+        smoothedFreqRef.current = stableFreq;
+      } else {
+        smoothedCentsRef.current = smoothedCentsRef.current * (1 - alpha) + rawCents * alpha;
+        smoothedFreqRef.current = smoothedFreqRef.current * (1 - alpha) + stableFreq * alpha;
+      }
+
+      const currentSmoothedCents = smoothedCentsRef.current;
+      setCents(currentSmoothedCents);
+      setDetectedFreq(smoothedFreqRef.current);
+
+      const absCents = Math.abs(currentSmoothedCents);
+      if (absCents <= 3.5) {
+        setAction('in_tune');
+      } else if (currentSmoothedCents < 0) {
+        setAction('too_low');
+      } else {
+        setAction('too_high');
+      }
+    } else {
+      // Silence / signal dropped below noise gate
+      silenceCountRef.current++;
+      freqHistoryRef.current = [];
+      candidateSwitchRef.current = null;
+
+      // Hold reading for ~300ms (18 frames @ 60fps), then gently drift back to center
+      if (silenceCountRef.current > 18) {
+        smoothedCentsRef.current *= 0.92;
+        if (Math.abs(smoothedCentsRef.current) < 0.2) {
+          smoothedCentsRef.current = 0;
+          setCents(0);
+          setAction('idle');
+          setDetectedFreq(null);
+        } else {
+          setCents(smoothedCentsRef.current);
+        }
+      }
+    }
   }, []);
 
   const toggleMic = useCallback(async () => {
@@ -119,7 +256,6 @@ export function useAudioTuner({
         await audioCtx.resume();
       }
 
-      // Request microphone access with safe fallback
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -130,18 +266,15 @@ export function useAudioTuner({
           },
         });
       } catch {
-        // Fallback for devices/browsers that reject specific constraints
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       }
 
-      // Ensure audio context is running
       if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
       }
 
       streamRef.current = stream;
 
-      // Create nodes and hold persistent references to avoid Garbage Collection
       const source = audioCtx.createMediaStreamSource(stream);
       sourceRef.current = source;
 
@@ -149,8 +282,6 @@ export function useAudioTuner({
       analyser.fftSize = 2048;
       analyserRef.current = analyser;
 
-      // Connect to a 0-gain node and destination:
-      // This forces Chrome and Safari to pull and clock the audio stream without playing feedback
       const silentGain = audioCtx.createGain();
       silentGain.gain.value = 0;
       silentGainRef.current = silentGain;
@@ -164,83 +295,7 @@ export function useAudioTuner({
       const buffer = new Float32Array(analyser.fftSize);
 
       const loop = () => {
-        if (!analyserRef.current) return;
-
-        analyserRef.current.getFloatTimeDomainData(buffer);
-        const { detectedFreq: freq, rms } = detectPitch(
-          buffer,
-          audioCtx.sampleRate,
-          noiseGateRef.current
-        );
-
-        // Volume meter: scaled smoothly between 0% and 100%
-        const volPercent = Math.min(100, Math.round((rms / 0.06) * 100));
-        setVolume(volPercent);
-
-        if (freq > 0) {
-          setDetectedFreq(freq);
-          let target = selectedStringRef.current;
-
-          if (isAutoModeRef.current) {
-            const currentString = selectedStringRef.current;
-            const currentCentsDiff = Math.abs(calculateCents(freq, currentString.frequency));
-
-            if (currentCentsDiff <= 50) {
-              // 1. Frequência corresponde à corda atualmente selecionada dentro de ±50 cents: mantém!
-              target = currentString;
-            } else {
-              // 2. Se não for a corda atual, verifica se corresponde à outra corda do MESMO par (±50 cents)
-              const samePairStrings = presetRef.current.strings.filter(
-                (s) => s.pair === currentString.pair && s.id !== currentString.id
-              );
-              let partnerMatch: ViolaString | null = null;
-              let minPartnerDiff = Infinity;
-
-              for (const partner of samePairStrings) {
-                const diff = Math.abs(calculateCents(freq, partner.frequency));
-                if (diff <= 50 && diff < minPartnerDiff) {
-                  minPartnerDiff = diff;
-                  partnerMatch = partner;
-                }
-              }
-
-              if (partnerMatch) {
-                target = partnerMatch;
-                onAutoSelectRef.current(target.id);
-              } else {
-                // 3. Apenas se fora de ±50 cents do par atual, busca a corda mais próxima no instrumento
-                let minDiff = Infinity;
-                let bestString = currentString;
-
-                for (const s of presetRef.current.strings) {
-                  const diff = Math.abs(calculateCents(freq, s.frequency));
-                  if (diff < minDiff) {
-                    minDiff = diff;
-                    bestString = s;
-                  }
-                }
-
-                if (bestString.id !== currentString.id) {
-                  onAutoSelectRef.current(bestString.id);
-                }
-                target = bestString;
-              }
-            }
-          }
-
-          const c = calculateCents(freq, target.frequency);
-          setCents(c);
-
-          const absCents = Math.abs(c);
-          if (absCents <= 3.5) {
-            setAction('in_tune');
-          } else if (c < 0) {
-            setAction('too_low');
-          } else {
-            setAction('too_high');
-          }
-        }
-
+        processFrame(audioCtx, buffer);
         animFrameRef.current = requestAnimationFrame(loop);
       };
 
@@ -250,7 +305,7 @@ export function useAudioTuner({
       setIsMicActive(false);
       setMicError('Não foi possível acessar o microfone. Verifique se o microfone está liberado nas permissões do seu navegador.');
     }
-  }, [isMicActive, stopAudioLoop]);
+  }, [isMicActive, stopAudioLoop, processFrame]);
 
   const playAudioFile = useCallback(async (file: File) => {
     try {
@@ -279,78 +334,7 @@ export function useAudioTuner({
       const buffer = new Float32Array(analyser.fftSize);
 
       const loop = () => {
-        if (!analyserRef.current) return;
-        analyserRef.current.getFloatTimeDomainData(buffer);
-        const { detectedFreq: freq, rms } = detectPitch(
-          buffer,
-          audioCtx.sampleRate,
-          noiseGateRef.current
-        );
-
-        const volPercent = Math.min(100, Math.round((rms / 0.06) * 100));
-        setVolume(volPercent);
-
-        if (freq > 0) {
-          setDetectedFreq(freq);
-          let target = selectedStringRef.current;
-
-          if (isAutoModeRef.current) {
-            const currentString = selectedStringRef.current;
-            const currentCentsDiff = Math.abs(calculateCents(freq, currentString.frequency));
-
-            if (currentCentsDiff <= 50) {
-              target = currentString;
-            } else {
-              const samePairStrings = presetRef.current.strings.filter(
-                (s) => s.pair === currentString.pair && s.id !== currentString.id
-              );
-              let partnerMatch: ViolaString | null = null;
-              let minPartnerDiff = Infinity;
-
-              for (const partner of samePairStrings) {
-                const diff = Math.abs(calculateCents(freq, partner.frequency));
-                if (diff <= 50 && diff < minPartnerDiff) {
-                  minPartnerDiff = diff;
-                  partnerMatch = partner;
-                }
-              }
-
-              if (partnerMatch) {
-                target = partnerMatch;
-                onAutoSelectRef.current(target.id);
-              } else {
-                let minDiff = Infinity;
-                let bestString = currentString;
-
-                for (const s of presetRef.current.strings) {
-                  const diff = Math.abs(calculateCents(freq, s.frequency));
-                  if (diff < minDiff) {
-                    minDiff = diff;
-                    bestString = s;
-                  }
-                }
-
-                if (bestString.id !== currentString.id) {
-                  onAutoSelectRef.current(bestString.id);
-                }
-                target = bestString;
-              }
-            }
-          }
-
-          const c = calculateCents(freq, target.frequency);
-          setCents(c);
-
-          const absCents = Math.abs(c);
-          if (absCents <= 3.5) {
-            setAction('in_tune');
-          } else if (c < 0) {
-            setAction('too_low');
-          } else {
-            setAction('too_high');
-          }
-        }
-
+        processFrame(audioCtx, buffer);
         animFrameRef.current = requestAnimationFrame(loop);
       };
 
@@ -364,9 +348,8 @@ export function useAudioTuner({
       console.error('Erro ao processar áudio:', err);
       setMicError('Não foi possível decodificar o arquivo de áudio gravado.');
     }
-  }, [stopAudioLoop]);
+  }, [stopAudioLoop, processFrame]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopAudioLoop();
