@@ -30,6 +30,7 @@ export function App() {
     isMicActive,
     detectedFreq,
     cents,
+    dialAngle,
     action,
     volume,
     micError,
@@ -43,6 +44,7 @@ export function App() {
     selectedString,
     isAutoMode,
     noiseGateThreshold,
+    a4BaseFreq,
     onAutoSelectString: (id) => setSelectedStringId(id),
   });
 
@@ -109,9 +111,11 @@ export function App() {
           <div className="lg:col-span-7 flex flex-col gap-4">
             <TunerMeter
               selectedString={selectedString}
+              currentPreset={currentPreset}
               isMicActive={isMicActive}
               detectedFreq={detectedFreq}
               cents={cents}
+              dialAngle={dialAngle}
               action={action}
               volume={volume}
               noiseGateThreshold={noiseGateThreshold}

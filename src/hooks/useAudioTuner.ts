@@ -9,6 +9,7 @@ interface UseAudioTunerProps {
   selectedString: ViolaString;
   isAutoMode: boolean;
   noiseGateThreshold: number;
+  a4BaseFreq: number;
   onAutoSelectString: (stringId: number) => void;
 }
 
@@ -17,11 +18,13 @@ export function useAudioTuner({
   selectedString,
   isAutoMode,
   noiseGateThreshold,
+  a4BaseFreq,
   onAutoSelectString,
 }: UseAudioTunerProps) {
   const [isMicActive, setIsMicActive] = useState<boolean>(false);
   const [detectedFreq, setDetectedFreq] = useState<number | null>(null);
   const [cents, setCents] = useState<number>(0);
+  const [dialAngle, setDialAngle] = useState<number>(0); // in degrees
   const [action, setAction] = useState<TuningAction>('idle');
   const [volume, setVolume] = useState<number>(0);
   const [micError, setMicError] = useState<string | null>(null);
@@ -33,18 +36,22 @@ export function useAudioTuner({
   const silentGainRef = useRef<GainNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  // Smoothing and stabilization dynamics
+  // Google Guitar Tuner Dynamics & Damping Engine
+  const lastRmsRef = useRef<number>(0);
+  const assessUntilTimeRef = useRef<number>(0);
+  const realDialAngleRef = useRef<number>(0);
+  const dialAngleRef = useRef<number>(0);
+  const frequencyToRenderRef = useRef<number>(0);
   const smoothedCentsRef = useRef<number>(0);
-  const smoothedFreqRef = useRef<number>(0);
-  const freqHistoryRef = useRef<number[]>([]);
-  const candidateSwitchRef = useRef<{ id: number; count: number } | null>(null);
   const silenceCountRef = useRef<number>(0);
+  const freqHistoryRef = useRef<number[]>([]);
 
   // Synchronized refs for the animation loop
   const presetRef = useRef(currentPreset);
   const selectedStringRef = useRef(selectedString);
   const isAutoModeRef = useRef(isAutoMode);
   const noiseGateRef = useRef(noiseGateThreshold);
+  const a4Ref = useRef(a4BaseFreq);
   const onAutoSelectRef = useRef(onAutoSelectString);
 
   useEffect(() => {
@@ -64,8 +71,28 @@ export function useAudioTuner({
   }, [noiseGateThreshold]);
 
   useEffect(() => {
+    a4Ref.current = a4BaseFreq;
+  }, [a4BaseFreq]);
+
+  useEffect(() => {
     onAutoSelectRef.current = onAutoSelectString;
   }, [onAutoSelectString]);
+
+  // When changing selected string while idle, smoothly align dial to target note
+  useEffect(() => {
+    if (detectedFreq === null) {
+      const a4 = a4BaseFreq || 440;
+      const TAU = Math.PI * 2;
+      const targetLinearized = Math.log2(selectedString.frequency / a4);
+      const targetAngle = (targetLinearized * TAU - Math.PI * 0.5) % TAU;
+      let angleDiff = (targetAngle - realDialAngleRef.current) % TAU;
+      if (angleDiff > Math.PI) angleDiff -= TAU;
+      if (angleDiff < -Math.PI) angleDiff += TAU;
+      realDialAngleRef.current += angleDiff;
+      dialAngleRef.current = realDialAngleRef.current;
+      setDialAngle((dialAngleRef.current * 180) / Math.PI);
+    }
+  }, [selectedString.id, a4BaseFreq, detectedFreq]);
 
   const stopAudioLoop = useCallback(() => {
     if (animFrameRef.current) {
@@ -110,14 +137,18 @@ export function useAudioTuner({
     setAction('idle');
     setCents(0);
     setDetectedFreq(null);
-    smoothedCentsRef.current = 0;
-    smoothedFreqRef.current = 0;
-    freqHistoryRef.current = [];
-    candidateSwitchRef.current = null;
+    lastRmsRef.current = 0;
+    assessUntilTimeRef.current = 0;
     silenceCountRef.current = 0;
+    freqHistoryRef.current = [];
   }, []);
 
-  // Core processing loop with Median Filtering + Exponential Moving Average (EMA)
+  /**
+   * Google Guitar Tuner Core Algorithm adapted for Viola Caipira:
+   * 1. Onset-Gated String Assessment: Only reassess target string when volume jumps (pluck onset).
+   * 2. Shortest-path circular dial calculation with proportional damping (alpha = 0.15).
+   * 3. Fluid frequency and cents tracking without frame-by-frame jitter.
+   */
   const processFrame = useCallback((audioCtx: AudioContext, buffer: Float32Array<ArrayBuffer>) => {
     if (!analyserRef.current) return;
 
@@ -128,14 +159,25 @@ export function useAudioTuner({
       noiseGateRef.current
     );
 
-    // Smooth volume meter: scaled smoothly between 0% and 100%
+    // Smooth volume meter
     const rawVol = Math.min(100, Math.round((rms / 0.06) * 100));
     setVolume(rawVol);
+
+    const now = performance.now();
+    const TAU = Math.PI * 2;
+    const rmsOnsetThreshold = 0.005;
+
+    // Google Onset Check: Only check for a new string if the volume goes up.
+    // Otherwise assume that the string is the same as the last frame!
+    if (rms > lastRmsRef.current + rmsOnsetThreshold && rawFreq > 0) {
+      assessUntilTimeRef.current = now + 280; // 280ms assessment window on string attack
+    }
+    lastRmsRef.current = rms;
 
     if (rawFreq > 0) {
       silenceCountRef.current = 0;
 
-      // 1. Median filtering over last 5 detected frequencies to eliminate transient pick spikes
+      // Median filtering over 5 frames to eliminate any single-frame transient spikes
       freqHistoryRef.current.push(rawFreq);
       if (freqHistoryRef.current.length > 5) {
         freqHistoryRef.current.shift();
@@ -143,86 +185,76 @@ export function useAudioTuner({
       const sorted = [...freqHistoryRef.current].sort((a, b) => a - b);
       const stableFreq = sorted[Math.floor(sorted.length / 2)];
 
-      // 2. Identify target string with Pitch-Lock and Anti-Flicker Hysteresis
       let target = selectedStringRef.current;
 
+      // Google Onset-Gated String Assessment (Modo Automático):
+      // Only reassess which string is being tuned during the initial attack window.
+      // While the note is sustaining/decaying, KEEP THE STRING LOCKED!
       if (isAutoModeRef.current) {
-        const currentString = selectedStringRef.current;
-        const currentCentsDiff = Math.abs(calculateCents(stableFreq, currentString.frequency));
+        if (now < assessUntilTimeRef.current) {
+          const currentDiff = Math.abs(calculateCents(stableFreq, target.frequency));
+          let minDiff = currentDiff;
+          let bestString = target;
 
-        // Pitch-Lock: Se a frequência estiver a até ±65 cents da corda selecionada, mantém travado firmemente nela!
-        if (currentCentsDiff <= 65) {
-          candidateSwitchRef.current = null;
-          target = currentString;
-        } else {
-          // Apenas tenta trocar de corda se a frequência estiver claramente fora da corda atual
-          // 1. Procura primeiro no parceiro do mesmo par
-          const samePairStrings = presetRef.current.strings.filter(
-            (s) => s.pair === currentString.pair && s.id !== currentString.id
-          );
-          let candidateString: ViolaString | null = null;
-          let minDiff = Infinity;
-
-          for (const partner of samePairStrings) {
-            const diff = Math.abs(calculateCents(stableFreq, partner.frequency));
-            if (diff <= 50 && diff < minDiff) {
+          for (const s of presetRef.current.strings) {
+            const diff = Math.abs(calculateCents(stableFreq, s.frequency));
+            // Only switch to a different string if it is significantly closer (> 18 cents closer)
+            // This prevents jumping between strings sharing identical frequencies (e.g. 1º Par vs 4º Requinta)
+            if (diff < minDiff - 18) {
               minDiff = diff;
-              candidateString = partner;
+              bestString = s;
             }
           }
 
-          // 2. Se não for do mesmo par, procura nas outras cordas da viola
-          if (!candidateString) {
-            for (const s of presetRef.current.strings) {
-              const diff = Math.abs(calculateCents(stableFreq, s.frequency));
-              if (diff < minDiff) {
-                minDiff = diff;
-                candidateString = s;
-              }
-            }
-          }
-
-          if (candidateString && candidateString.id !== currentString.id) {
-            // Anti-Flicker Debounce: A nova nota precisa persistir por pelo menos 15 quadros (~250ms)
-            // antes de trocar de corda, impedindo que harmônicos ou ressonâncias façam a tela piscar
-            if (candidateSwitchRef.current?.id === candidateString.id) {
-              candidateSwitchRef.current.count++;
-              if (candidateSwitchRef.current.count >= 15) {
-                target = candidateString;
-                onAutoSelectRef.current(target.id);
-                candidateSwitchRef.current = null;
-                // Inicializa o EMA no novo alvo
-                smoothedCentsRef.current = calculateCents(stableFreq, target.frequency);
-              }
-            } else {
-              candidateSwitchRef.current = { id: candidateString.id, count: 1 };
-            }
-          } else {
-            candidateSwitchRef.current = null;
+          if (bestString && bestString.id !== selectedStringRef.current.id) {
+            target = bestString;
+            onAutoSelectRef.current(target.id);
           }
         }
       }
 
-      // 3. Smooth Exponential Moving Average (EMA) for the needle and cents
-      const rawCents = calculateCents(stableFreq, target.frequency);
-      const alpha = 0.16; // fluid analog needle inertia (~120ms settling time)
+      // 1. Google Circular Clock Angle Calculation:
+      // Convert frequency to linear semitones based on A4
+      const a4 = a4Ref.current || 440;
+      const linearizedFrequency = Math.log2(stableFreq / a4);
+      // Align A to 12 o'clock (-PI / 2)
+      const newDialAngle = (linearizedFrequency * TAU - Math.PI * 0.5) % TAU;
 
-      if (smoothedFreqRef.current === 0) {
-        smoothedCentsRef.current = rawCents;
-        smoothedFreqRef.current = stableFreq;
+      // Shortest angular travel around the circle
+      let angleDiff = (newDialAngle - realDialAngleRef.current) % TAU;
+      if (angleDiff > Math.PI) angleDiff -= TAU;
+      if (angleDiff < -Math.PI) angleDiff += TAU;
+
+      realDialAngleRef.current = realDialAngleRef.current + angleDiff;
+
+      // Google Needle Damping Equation:
+      // dialAngle += (realDialAngle - dialAngle) * 0.15;
+      dialAngleRef.current += (realDialAngleRef.current - dialAngleRef.current) * 0.15;
+
+      // 2. Google Frequency and Cents Smoothing:
+      if (frequencyToRenderRef.current === 0) {
+        frequencyToRenderRef.current = stableFreq;
       } else {
-        smoothedCentsRef.current = smoothedCentsRef.current * (1 - alpha) + rawCents * alpha;
-        smoothedFreqRef.current = smoothedFreqRef.current * (1 - alpha) + stableFreq * alpha;
+        frequencyToRenderRef.current += (stableFreq - frequencyToRenderRef.current) * 0.15;
       }
 
-      const currentSmoothedCents = smoothedCentsRef.current;
-      setCents(currentSmoothedCents);
-      setDetectedFreq(smoothedFreqRef.current);
+      const rawCents = calculateCents(stableFreq, target.frequency);
+      if (smoothedCentsRef.current === 0) {
+        smoothedCentsRef.current = rawCents;
+      } else {
+        smoothedCentsRef.current += (rawCents - smoothedCentsRef.current) * 0.15;
+      }
 
-      const absCents = Math.abs(currentSmoothedCents);
+      const currentCents = smoothedCentsRef.current;
+      setCents(currentCents);
+      setDetectedFreq(frequencyToRenderRef.current);
+      setDialAngle((dialAngleRef.current * 180) / Math.PI);
+
+      // Status determination
+      const absCents = Math.abs(currentCents);
       if (absCents <= 3.5) {
         setAction('in_tune');
-      } else if (currentSmoothedCents < 0) {
+      } else if (currentCents < 0) {
         setAction('too_low');
       } else {
         setAction('too_high');
@@ -230,12 +262,11 @@ export function useAudioTuner({
     } else {
       // Silence / signal dropped below noise gate
       silenceCountRef.current++;
-      candidateSwitchRef.current = null;
       if (silenceCountRef.current > 10) {
         freqHistoryRef.current = [];
       }
 
-      // Hold reading for ~300ms (18 frames @ 60fps), then gently drift back to center
+      // Smooth decay back to zero after 300ms of silence
       if (silenceCountRef.current > 18) {
         smoothedCentsRef.current *= 0.92;
         if (Math.abs(smoothedCentsRef.current) < 0.2) {
@@ -246,6 +277,17 @@ export function useAudioTuner({
         } else {
           setCents(smoothedCentsRef.current);
         }
+
+        // Smoothly guide the needle toward the nominal target string angle during silence
+        const a4 = a4Ref.current || 440;
+        const targetLinearized = Math.log2(selectedStringRef.current.frequency / a4);
+        const targetAngle = (targetLinearized * TAU - Math.PI * 0.5) % TAU;
+        let angleDiff = (targetAngle - realDialAngleRef.current) % TAU;
+        if (angleDiff > Math.PI) angleDiff -= TAU;
+        if (angleDiff < -Math.PI) angleDiff += TAU;
+        realDialAngleRef.current += angleDiff * 0.08;
+        dialAngleRef.current += (realDialAngleRef.current - dialAngleRef.current) * 0.12;
+        setDialAngle((dialAngleRef.current * 180) / Math.PI);
       }
     }
   }, []);
@@ -368,6 +410,7 @@ export function useAudioTuner({
     isMicActive,
     detectedFreq,
     cents,
+    dialAngle,
     action,
     volume,
     micError,
